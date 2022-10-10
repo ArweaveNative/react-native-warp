@@ -271,6 +271,71 @@ export class HandlerBasedContract<State> implements Contract<State> {
     }
   }
 
+  async createBundleInteractionTx<Input>(
+    input: Input,
+    options?: WriteInteractionOptions
+  ): Promise<Transaction> {
+    this.logger.info('createBundleInteractionTx', { input, options });
+    if (!this.signer) {
+      throw new Error("Wallet not connected. Use 'connect' method first.");
+    }
+
+    const effectiveTags = options?.tags || [];
+    const effectiveTransfer = options?.transfer || emptyTransfer;
+    const effectiveStrict = options?.strict === true;
+    const effectiveVrf = options?.vrf === true;
+
+    if (
+      effectiveTransfer.target != emptyTransfer.target &&
+      effectiveTransfer.winstonQty != emptyTransfer.winstonQty
+    ) {
+      throw new Error('Ar Transfers are not allowed for bundled interactions');
+    }
+
+    const interactionTx = await this.createInteraction(
+      input,
+      effectiveTags,
+      emptyTransfer,
+      effectiveStrict,
+      true,
+      effectiveVrf
+    );
+
+    return interactionTx;
+  }
+
+  async submitBundleInteractionTx(
+    interactionTx: Transaction 
+  ): Promise<WriteInteractionResponse | null> {
+    this.logger.info('submitBundleInteractionTx', interactionTx);
+
+    const response = await fetch(`${this._evaluationOptions.bundlerUrl}gateway/sequencer/register`, {
+      method: 'POST',
+      body: JSON.stringify(interactionTx),
+      headers: {
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      }
+    })
+      .then((res) => {
+        this.logger.debug(res);
+        return res.ok ? res.json() : Promise.reject(res);
+      })
+      .catch((error) => {
+        this.logger.error(error);
+        if (error.body?.message) {
+          this.logger.error(error.body.message);
+        }
+        throw new Error(`Unable to bundle interaction: ${JSON.stringify(error)}`);
+      });
+
+    return {
+      bundlrResponse: response,
+      originalTxId: interactionTx.id
+    };
+  }
+
   private async bundleInteraction<Input>(
     input: Input,
     options: {
