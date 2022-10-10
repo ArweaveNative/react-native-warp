@@ -103,6 +103,73 @@ export class DefaultCreateContract implements CreateContract {
     }
   }
 
+  async createBundlrTxFromSourceTx(
+    contractData: FromSrcTxContractData,
+    disableBundling?: boolean,
+  ): Promise<Transaction> {
+    this.logger.debug('createBundlrTxFromSourceTx');
+    const { wallet, srcTxId, initState, tags, transfer, data } = contractData;
+
+    const effectiveUseBundler =
+      disableBundling == undefined ? this.warp.definitionLoader.type() == 'warp' : !disableBundling;
+
+    let contractTX = await this.arweave.createTransaction({ data: data?.body || initState }, wallet);
+
+    if (+transfer?.winstonQty > 0 && transfer.target.length) {
+      this.logger.debug('Creating additional transaction with AR transfer', transfer);
+      contractTX = await this.arweave.createTransaction(
+        {
+          data: data?.body || initState,
+          target: transfer.target,
+          quantity: transfer.winstonQty
+        },
+        wallet
+      );
+    }
+
+    if (tags?.length) {
+      for (const tag of tags) {
+        contractTX.addTag(tag.name.toString(), tag.value.toString());
+      }
+    }
+    contractTX.addTag(SmartWeaveTags.APP_NAME, 'SmartWeaveContract');
+    contractTX.addTag(SmartWeaveTags.APP_VERSION, '0.3.0');
+    contractTX.addTag(SmartWeaveTags.CONTRACT_SRC_TX_ID, srcTxId);
+    contractTX.addTag(SmartWeaveTags.SDK, 'RedStone');
+    if (data) {
+      contractTX.addTag(SmartWeaveTags.CONTENT_TYPE, data['Content-Type']);
+      contractTX.addTag(SmartWeaveTags.INIT_STATE, initState);
+    } else {
+      contractTX.addTag(SmartWeaveTags.CONTENT_TYPE, 'application/json');
+    }
+
+    await this.arweave.transactions.sign(contractTX, wallet);
+
+    return contractTX;
+  }
+
+  async deployContractFromBundlrTx(
+    contractTX: Transaction,
+  ): Promise<ContractDeploy> {
+    this.logger.debug('deployContractFromBundlrTx');
+    const { srcTxId } = contractTX;
+
+    let responseOk: boolean;
+    let response: { status: number; statusText: string; data: any };
+
+    const result = await this.post(contractTX, null);
+    this.logger.debug(result);
+    responseOk = true;
+
+    if (responseOk) {
+      return { contractTxId: contractTX.id, srcTxId };
+    } else {
+      throw new Error(
+        `Unable to write Contract. Arweave responded with status ${response.status}: ${response.statusText}`
+      );
+    }
+  }
+
   private async post(contractTx: Transaction, srcTx: Transaction = null): Promise<any> {
     let body: any = {
       contractTx
